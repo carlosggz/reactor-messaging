@@ -1,0 +1,53 @@
+spring:
+  rabbitmq:
+    host: 127.0.0.1
+    port: 5672
+    username: guest
+    password: guest
+  kafka:
+    bootstrap-servers: localhost:9999
+  reactive:
+    test-mode: true
+    retry-attempts: 2
+    retry-duration: 100
+    rabbit:
+      connection-recovery:
+        timeout: 456
+        waiting: 123
+      bindings:
+        fromRouted:
+          group-name: ${spring.application.name}
+          exchange-name: executionRouted
+          exchange-type: topic
+          routing-key: "*.my-app.executionRouted"
+          auto-ack: false
+        fromCompleted:
+          group-name: ${spring.application.name}
+          exchange-name: executionCompleted
+          routing-key: "*.my-app.executionCompleted"
+        fromRejected:
+          group-name: ${spring.application.name}.1
+          exchange-name: executionRejected
+          auto-delete: true
+          use-dlq: false
+          routing-key: "*.my-app.executionRejected"
+        fromCustom:
+          group-name: ${spring.application.name}
+          exchange-name: customMessages
+          routing-key: "*.my-app.customMessages"
+          target-type: "org.example.reactormessaging.utils.CustomDto"
+        fromError:
+          group-name: ${spring.application.name}
+          exchange-name: errorExchange
+          routing-key: "*.my-app.errorExchange"
+    kafka:
+      servers: ${spring.kafka.bootstrap-servers}
+      group-id: ${spring.application.name}
+      bindings:
+        fromEventsKafka:
+          topic: events
+        fromCustomKafka:
+          topic: dto
+          target-type: "org.example.reactormessaging.utils.CustomDto"
+        fromError:
+          topic: errorTopic

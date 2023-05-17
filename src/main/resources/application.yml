@@ -1,0 +1,4 @@
+spring:
+  application:
+    name: "reactor-messaging"
+  main.allow-bean-definition-overriding: true
