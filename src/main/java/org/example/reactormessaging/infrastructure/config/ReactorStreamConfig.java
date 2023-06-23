@@ -1,11 +1,6 @@
 package org.example.reactormessaging.infrastructure.config;
 
 import com.fasterxml.jackson.databind.JavaType;
-import org.example.reactormessaging.domain.components.ReflectionUtilsComponent;
-import org.example.reactormessaging.domain.exceptions.RetryExhaustedException;
-import org.example.reactormessaging.infrastructure.properties.ReactorKafkaProperties;
-import org.example.reactormessaging.infrastructure.properties.ReactorProperties;
-import org.example.reactormessaging.infrastructure.properties.ReactorRabbitProperties;
 import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Delivery;
 import lombok.RequiredArgsConstructor;
@@ -13,12 +8,17 @@ import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
+import org.example.reactormessaging.domain.components.ReflectionUtilsComponent;
+import org.example.reactormessaging.domain.exceptions.RetryExhaustedException;
+import org.example.reactormessaging.domain.models.MessageDetails;
+import org.example.reactormessaging.infrastructure.properties.ReactorKafkaProperties;
+import org.example.reactormessaging.infrastructure.properties.ReactorProperties;
+import org.example.reactormessaging.infrastructure.properties.ReactorRabbitProperties;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.messaging.Message;
-import org.springframework.messaging.support.MessageBuilder;
+import org.springframework.messaging.MessageHeaders;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import reactor.kafka.receiver.KafkaReceiver;
@@ -34,6 +34,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static reactor.rabbitmq.BindingSpecification.binding;
@@ -69,16 +70,31 @@ public class ReactorStreamConfig {
             ReactorRabbitProperties reactorRabbitProperties,
             RetryBackoffSpec retrySpec) {
 
+        val exchanges = Optional
+                .ofNullable(reactorRabbitProperties.getExchanges())
+                .orElse(List.of());
+
         val bindings = Optional
                 .ofNullable(reactorRabbitProperties.getBindings())
                 .orElse(Map.of())
                 .entrySet();
 
-        bindings.forEach(q ->
-                registerExchange(sender, q.getValue())
-                        .flatMap(b -> registerQueue(q.getValue(), sender))
-                        .flatMap(b -> registerDeadLetter(q.getValue(), sender))
-                        .block());
+        Function<String, ReactorRabbitProperties.ExchangeSettings> searchExchange = name -> exchanges
+                .stream()
+                .filter(x -> x.getName().equals(name))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Invalid exchange name " + name));
+
+        exchanges.forEach(exchange -> registerExchange(sender, exchange).block());
+
+        bindings.forEach(binding -> {
+            // First, re-declare exchange to ensure availability
+            registerExchange(sender, searchExchange.apply(binding.getValue().getExchangeName()))
+                    .flatMap(x -> registerQueue(binding.getValue(), sender))
+                    .flatMap(x -> registerDeadLetter(binding.getValue(), sender))
+                    .block();
+        });
+
         return bindings
                 .stream()
                 .map(q -> registerRabbitConsumerBean(q.getKey(), q.getValue(), receiver, connectionRecovery, retrySpec))
@@ -123,22 +139,21 @@ public class ReactorStreamConfig {
                 );
         return disposable::dispose;
     }
-    private Mono<AMQP.Exchange.DeclareOk> registerExchange(Sender sender, ReactorRabbitProperties.BindingSettings e) {
+    private Mono<AMQP.Exchange.DeclareOk> registerExchange(Sender sender, ReactorRabbitProperties.ExchangeSettings e) {
         return sender
-                .declare(exchange(e.getExchangeName()).type(e.getExchangeType().name()))
-                .doOnNext(bind -> log.info("Created exchange {}", e.getExchangeName()));
+                .declare(exchange(e.getName()).type(e.getType().name()))
+                .doOnNext(bind -> log.info("Created exchange {}", e.getName()));
     }
 
     private Mono<AMQP.Queue.BindOk> registerQueue(ReactorRabbitProperties.BindingSettings q, Sender sender) {
         return sender
-                .declare(exchange(q.getExchangeName()).type(q.getExchangeType().name()))
-                .then(sender.declare(queue(q.getQueueName())
+                .declare(queue(q.getQueueName())
                         .durable(q.isDurable())
                         .autoDelete(q.isAutoDelete())
-                        .arguments(q.isUseDlq() ? deadLetterConfig(q.getQueueName() ) : Map.of())))
+                        .arguments(q.isUseDlq() ? deadLetterConfig(q.getQueueName() ) : Map.of()))
                 .then(sender.bind(binding().exchange(q.getExchangeName()).queue(q.getQueueName()).routingKey(q.getRoutingKey())))
                 .doOnNext(bind -> log.info("Exchange {} and queue {} declared and bound with routing key {}",
-                                q.getExchangeName(), q.getQueueName(), q.getRoutingKey()));
+                        q.getExchangeName(), q.getQueueName(), q.getRoutingKey()));
     }
 
     private Mono<AMQP.Queue.BindOk> registerDeadLetter(ReactorRabbitProperties.BindingSettings q, Sender sender) {
@@ -167,9 +182,9 @@ public class ReactorStreamConfig {
 
         var flux = bindingSettings.isAutoAck()
                 ? receiver.consumeAutoAck(
-                        bindingSettings.getQueueName(), new ConsumeOptions().exceptionHandler(connectionRecovery))
+                bindingSettings.getQueueName(), new ConsumeOptions().exceptionHandler(connectionRecovery))
                 : receiver.consumeManualAck(
-                        bindingSettings.getQueueName(), new ConsumeOptions().exceptionHandler(connectionRecovery));
+                bindingSettings.getQueueName(), new ConsumeOptions().exceptionHandler(connectionRecovery));
 
         var disposable = flux
                 .subscribe(delivery -> Mono
@@ -182,9 +197,7 @@ public class ReactorStreamConfig {
                             getAckDelivery(delivery).ifPresent(d -> d.nack(false));
                             return false;
                         })
-                        .subscribe(message -> {
-                            getAckDelivery(delivery).ifPresent(AcknowledgableDelivery::ack);
-                        }));
+                        .subscribe(message -> getAckDelivery(delivery).ifPresent(AcknowledgableDelivery::ack)));
 
         return disposable::dispose;
     }
@@ -203,26 +216,28 @@ public class ReactorStreamConfig {
     }
 
 
-    private Message<Object> createMessageFromRabbitDelivery(JavaType targetJavaType, Delivery delivery, String message) {
-        return MessageBuilder
-                .withPayload(reflectionUtilsComponent.getParsedValueFromType(message, targetJavaType))
-                .copyHeaders(delivery.getProperties().getHeaders())
+    private MessageDetails<Object> createMessageFromRabbitDelivery(JavaType targetJavaType, Delivery delivery, String message) {
+        return MessageDetails.builder()
+                .payload(reflectionUtilsComponent.getParsedValueFromType(message, targetJavaType))
+                .headers(new MessageHeaders(delivery.getProperties().getHeaders()))
+                .routingKey(delivery.getEnvelope().getRoutingKey())
                 .build();
     }
 
-    private Message<Object> createMessageFromKafkaRecord(
+    private MessageDetails<Object> createMessageFromKafkaRecord(
             JavaType targetJavaType,
             ReceiverRecord<Integer, String> record,
             String message) {
-        return MessageBuilder
-                .withPayload(reflectionUtilsComponent.getParsedValueFromType(message, targetJavaType))
-                .copyHeaders(Arrays
+        return MessageDetails.builder()
+                .payload(reflectionUtilsComponent.getParsedValueFromType(message, targetJavaType))
+                .headers(new MessageHeaders(Arrays
                         .stream(Optional
                                 .ofNullable(record.headers())
                                 .map(Headers::toArray)
                                 .orElse(new Header[0]))
-                        .collect(Collectors.toMap(Header::key, Header::value))
+                        .collect(Collectors.toMap(Header::key, Header::value)))
                 )
+                .routingKey(String.format("%s", record.key())) //Do not use toString
                 .build();
     }
 }

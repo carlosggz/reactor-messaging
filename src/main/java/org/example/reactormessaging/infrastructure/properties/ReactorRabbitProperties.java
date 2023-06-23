@@ -5,6 +5,7 @@ import lombok.NoArgsConstructor;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -13,6 +14,11 @@ import java.util.Objects;
 @ConfigurationProperties(prefix = "spring.reactive.rabbit")
 @NoArgsConstructor
 public class ReactorRabbitProperties {
+
+    /**
+     * Exchanges list
+     */
+    private List<ExchangeSettings> exchanges;
 
     /**
      * Bindings list
@@ -49,18 +55,27 @@ public class ReactorRabbitProperties {
 
     @Data
     @NoArgsConstructor
+    public static class ExchangeSettings {
+        /**
+         * Exchange name
+         */
+        private String name;
+
+        /**
+         * Exchange type
+         * <p>Optional with default value topic</p>
+         */
+        private ExchangeType type = ExchangeType.topic;
+    }
+
+    @Data
+    @NoArgsConstructor
     public static class BindingSettings {
 
         /**
          * Exchange name
          */
         private String exchangeName;
-
-        /**
-         * Exchange type
-         * <p>Optional with default value topic</p>
-         */
-        private ExchangeType exchangeType = ExchangeType.topic;
 
         /**
          * Group name

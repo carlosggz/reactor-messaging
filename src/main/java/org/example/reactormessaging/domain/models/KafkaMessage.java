@@ -17,5 +17,5 @@ public class KafkaMessage {
     private String routingKey = null;
 
     @Builder.Default
-    private Map<String, String> headers = Map.of();
+    private Map<String, Object> headers = Map.of();
 }

@@ -2,6 +2,7 @@ package org.example.reactormessaging;
 
 import org.example.reactormessaging.domain.components.ReactorEventPublisher;
 import org.example.reactormessaging.domain.models.KafkaMessage;
+import org.example.reactormessaging.domain.models.MessageDetails;
 import org.example.reactormessaging.domain.models.RabbitMessage;
 import org.example.reactormessaging.infrastructure.properties.ReactorProperties;
 import org.example.reactormessaging.utils.CustomDto;
@@ -18,6 +19,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -28,7 +30,7 @@ class ReactorMessagingApplicationTests extends TestBase {
 
 	@Autowired
 	@Qualifier("testSuccessConcurrentCollection")
-	private List<String> testSuccessConcurrentCollection;
+	private List<MessageDetails<?>> testSuccessConcurrentCollection;
 
 	@Autowired
 	private ReactorProperties reactorProperties;
@@ -49,12 +51,16 @@ class ReactorMessagingApplicationTests extends TestBase {
 	@ValueSource(strings = {"executionRouted", "executionCompleted", "executionRejected"})
 	void whenRabbitMessageIsSentTheConsumerReceiveIt(String exchange) {
 		var message = "Hello at " + LocalDateTime.now();
+		var routingKey = "x.my-app." + exchange;
+		var headerName = "custom-header";
+		var headerValue = "header-value";
 
 		eventPublisher
 				.sendMessage(RabbitMessage.builder()
 						.payload(message)
 						.exchangeName(exchange)
-						.routingKey("x.my-app." + exchange)
+						.routingKey(routingKey)
+						.headers(Map.of(headerName, headerValue))
 						.build())
 				.subscribe();
 
@@ -63,7 +69,10 @@ class ReactorMessagingApplicationTests extends TestBase {
 				.atMost(Duration.ofSeconds(5))
 				.untilAsserted(() -> {
 					assertEquals(1, testSuccessConcurrentCollection.size());
-					assertEquals(message, testSuccessConcurrentCollection.get(0));
+					var result = testSuccessConcurrentCollection.get(0);
+					assertEquals(message, result.getPayload());
+					assertEquals(headerValue, result.getHeaders().get(headerName));
+					assertEquals(routingKey, result.getRoutingKey());
 				});
 	}
 
@@ -71,12 +80,16 @@ class ReactorMessagingApplicationTests extends TestBase {
 	@ValueSource(strings = {"events"})
 	void whenKafkaMessageIsSentTheConsumerReceiveIt(String topic) {
 		var message = "Hello at " + LocalDateTime.now();
+		var routingKey = "x.my-app." + topic;
+		var headerName = "custom-header";
+		var headerValue = "header-value";
 
 		eventPublisher
 				.sendMessage(KafkaMessage.builder()
 						.topic(topic)
-						.routingKey("some-routing-key")
+						.routingKey(routingKey)
 						.payload(message)
+						.headers(Map.of(headerName, headerValue))
 						.build())
 				.subscribe();
 
@@ -85,7 +98,13 @@ class ReactorMessagingApplicationTests extends TestBase {
 				.atMost(Duration.ofSeconds(5))
 				.untilAsserted(() -> {
 					assertEquals(1, testSuccessConcurrentCollection.size());
-					assertEquals(message, testSuccessConcurrentCollection.get(0));
+					var result = testSuccessConcurrentCollection.get(0);
+					assertEquals(message, result.getPayload());
+					assertEquals(routingKey, result.getRoutingKey());
+
+					var header = result.getHeaders().get(headerName);
+					assertNotNull(header);
+					assertEquals(headerValue, new String((byte[])header ));
 				});
 	}
 
@@ -110,7 +129,7 @@ class ReactorMessagingApplicationTests extends TestBase {
 				.atMost(Duration.ofSeconds(5))
 				.untilAsserted(() -> {
 					assertEquals(1, testSuccessConcurrentCollection.size());
-					assertEquals(message.toString(), testSuccessConcurrentCollection.get(0));
+					assertEquals(message, testSuccessConcurrentCollection.get(0).getPayload());
 				});
 	}
 
@@ -135,7 +154,7 @@ class ReactorMessagingApplicationTests extends TestBase {
 				.atMost(Duration.ofSeconds(5))
 				.untilAsserted(() -> {
 					assertEquals(1, testSuccessConcurrentCollection.size());
-					assertEquals(message.toString(), testSuccessConcurrentCollection.get(0));
+					assertEquals(message, testSuccessConcurrentCollection.get(0).getPayload());
 				});
 	}
 
@@ -156,7 +175,7 @@ class ReactorMessagingApplicationTests extends TestBase {
 				.atMost(Duration.ofSeconds(5))
 				.untilAsserted(() -> {
 					assertEquals(1+reactorProperties.getRetryAttempts(), testSuccessConcurrentCollection.size());
-					testSuccessConcurrentCollection.forEach(m -> assertEquals(message, m));
+					testSuccessConcurrentCollection.forEach(m -> assertEquals(message, m.getPayload()));
 				});
 	}
 
@@ -176,7 +195,7 @@ class ReactorMessagingApplicationTests extends TestBase {
 				.atMost(Duration.ofSeconds(5))
 				.untilAsserted(() -> {
 					assertEquals(1+reactorProperties.getRetryAttempts(), testSuccessConcurrentCollection.size());
-					testSuccessConcurrentCollection.forEach(m -> assertEquals(message, m));
+					testSuccessConcurrentCollection.forEach(m -> assertEquals(message, m.getPayload()));
 				});
 	}
 

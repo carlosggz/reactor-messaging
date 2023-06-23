@@ -14,11 +14,18 @@ spring:
       connection-recovery:
         timeout: 456
         waiting: 123
+      exchanges:
+        - name: executionRouted
+          type: topic
+        - name: executionCompleted
+        - name: executionRejected
+        - name: customMessages
+        - name: errorExchange
+        - name: other
       bindings:
         fromRouted:
           group-name: ${spring.application.name}
           exchange-name: executionRouted
-          exchange-type: topic
           routing-key: "*.my-app.executionRouted"
           auto-ack: false
         fromCompleted:

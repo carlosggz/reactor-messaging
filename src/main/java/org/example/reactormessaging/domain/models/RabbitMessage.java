@@ -17,5 +17,5 @@ public class RabbitMessage {
     private String routingKey = "#";
 
     @Builder.Default
-    private Map<String, String> headers = Map.of();
+    private Map<String, Object> headers = Map.of();
 }
