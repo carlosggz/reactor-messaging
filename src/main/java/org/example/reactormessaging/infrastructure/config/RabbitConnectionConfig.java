@@ -17,11 +17,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.DependsOn;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.rabbitmq.*;
 
 import java.io.IOException;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 import static java.lang.String.format;
@@ -80,13 +83,23 @@ public class RabbitConnectionConfig {
 
     @Bean
     public Sender sender(@Qualifier("connectionFactory") ConnectionFactory connectionFactory) {
-        return RabbitFlux.createSender(new SenderOptions().connectionFactory(connectionFactory));
+        return RabbitFlux
+                .createSender(new SenderOptions()
+                        .connectionFactory(connectionFactory)
+                        .connectionMono(getConnectionMono(connectionFactory, "sender-connection"))
+                        .connectionSubscriptionScheduler(Schedulers.boundedElastic())
+                );
     }
 
     @Bean
     @DependsOn("sender")
     public Receiver receiver(@Qualifier("connectionFactory") ConnectionFactory connectionFactory) {
-        return RabbitFlux.createReceiver(new ReceiverOptions().connectionFactory(connectionFactory));
+        return RabbitFlux
+                .createReceiver(new ReceiverOptions()
+                        .connectionFactory(connectionFactory)
+                        .connectionMono(getConnectionMono(connectionFactory, "receiver-connection"))
+                        .connectionSubscriptionScheduler(Schedulers.boundedElastic())
+                );
     }
 
     @Bean
@@ -96,6 +109,28 @@ public class RabbitConnectionConfig {
                 Duration.ofMillis(reactorRabbitProperties.getRetryAck().getWaiting()),
                 CONNECTION_RECOVERY_PREDICATE
         );
+    }
+
+    //https://github.com/reactor/reactor-rabbitmq/issues/142
+    public static Mono<Connection> getConnectionMono(final ConnectionFactory connectionFactory, String connectionName) {
+        var connectionHolder = new AtomicReference<Connection>();
+        return Mono.create(sink -> {
+            try {
+                Connection conn = connectionHolder.updateAndGet(c -> {
+                    try {
+                        return c != null && c.isOpen() ? c : connectionFactory.newConnection(connectionName);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+                if (conn == null) {
+                    sink.error(new RuntimeException("Failed to create RabbitMq connection"));
+                }
+                sink.success(conn);
+            } catch (Exception e) {
+                sink.error(e);
+            }
+        });
     }
 
     private static class ExtendedMockConnection extends MockConnection {
